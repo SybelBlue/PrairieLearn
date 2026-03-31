@@ -1,15 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert } from 'react-bootstrap';
-import z from 'zod';
 
 import { formatDateFriendly } from '@prairielearn/formatter';
 import { useModalState } from '@prairielearn/ui';
 
 import type { StaffCourseInstance } from '../../../lib/client/safe-db-types.js';
-import {
-  type CourseInstancePublishingExtensionRow,
-  CourseInstancePublishingExtensionRowSchema,
-} from '../instructorInstanceAdminPublishing.types.js';
+import type { createCourseInstanceTrpcClient } from '../../../trpc/courseInstance/client.js';
+import { useTRPC } from '../../../trpc/courseInstance/context.js';
+import type { CourseInstancePublishingExtensionRow } from '../instructorInstanceAdminPublishing.types.js';
 import { dateToPlainDateTime } from '../utils/dateUtils.js';
 
 import { ExtensionDeleteModal, type ExtensionDeleteModalData } from './ExtensionDeleteModal.js';
@@ -21,28 +19,19 @@ export function PublishingExtensions({
   initialExtensions,
   canEdit,
   canView,
-  csrfToken,
+  trpcClient,
 }: {
   courseInstance: StaffCourseInstance;
   initialExtensions: CourseInstancePublishingExtensionRow[];
   canEdit: boolean;
   canView: boolean;
-  csrfToken: string;
+  trpcClient: ReturnType<typeof createCourseInstanceTrpcClient>;
 }) {
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const extensionsQuery = useQuery<CourseInstancePublishingExtensionRow[]>({
-    queryKey: ['extensions'],
-    queryFn: async () => {
-      const res = await fetch(window.location.pathname + '/extension/data.json');
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message);
-      }
-      const parsedData = z.array(CourseInstancePublishingExtensionRowSchema).safeParse(data);
-      if (!parsedData.success) throw new Error('Failed to parse extensions');
-      return parsedData.data;
-    },
+  const extensionsQuery = useQuery({
+    ...trpc.publishingExtensions.list.queryOptions(),
     staleTime: Infinity,
     initialData: initialExtensions,
   });
@@ -168,18 +157,22 @@ export function PublishingExtensions({
         currentUnpublishText={currentInstanceEndDate}
         courseInstanceEndDate={courseInstance.publishing_end_date}
         courseInstanceTimezone={courseInstance.display_timezone}
-        csrfToken={csrfToken}
+        trpcClient={trpcClient}
         onSuccess={() => {
-          void queryClient.invalidateQueries({ queryKey: ['extensions'] });
+          void queryClient.invalidateQueries({
+            queryKey: trpc.publishingExtensions.list.queryKey(),
+          });
           modifyModalState.hide();
         }}
       />
 
       <ExtensionDeleteModal
         {...deleteModalState}
-        csrfToken={csrfToken}
+        trpcClient={trpcClient}
         onSuccess={async () => {
-          await queryClient.invalidateQueries({ queryKey: ['extensions'] });
+          await queryClient.invalidateQueries({
+            queryKey: trpc.publishingExtensions.list.queryKey(),
+          });
           deleteModalState.hide();
         }}
       />

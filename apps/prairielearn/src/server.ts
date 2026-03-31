@@ -92,6 +92,7 @@ import * as sprocs from './sprocs/index.js';
 import { administratorTrpcRouter } from './trpc/administrator/trpc.js';
 import { assessmentTrpcRouter } from './trpc/assessment/trpc.js';
 import { assessmentQuestionTrpcRouter } from './trpc/assessmentQuestion/trpc.js';
+import { courseTrpcRouter } from './trpc/course/trpc.js';
 import { courseInstanceTrpcRouter } from './trpc/courseInstance/trpc.js';
 
 process.on('warning', (e) => console.warn(e));
@@ -1571,6 +1572,8 @@ export async function initExpress(): Promise<Express> {
     '/pl/course/:course_id(\\d+)',
     (await import('./middlewares/authzHasCoursePreview.js')).default,
   );
+
+  app.use('/pl/course/:course_id(\\d+)/trpc', courseTrpcRouter);
 
   // single question
 

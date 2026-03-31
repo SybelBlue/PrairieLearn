@@ -8,6 +8,8 @@ import { OverlayTrigger } from '@prairielearn/ui';
 import { SyncProblemButton } from '../../components/SyncProblemButton.js';
 import type { StaffCourse } from '../../lib/client/safe-db-types.js';
 import { QueryClientProviderDebug } from '../../lib/client/tanstackQuery.js';
+import { createCourseTrpcClient } from '../../trpc/course/client.js';
+import { TRPCProvider } from '../../trpc/course/context.js';
 
 import { CreateCourseInstanceModal } from './components/CreateCourseInstanceModal.js';
 import { EmptyState } from './components/EmptyState.js';
@@ -56,7 +58,6 @@ interface InstructorCourseAdminInstancesInnerProps {
   course: StaffCourse;
   canEditCourse: boolean;
   needToSync: boolean;
-  csrfToken: string;
   urlPrefix: string;
   isAdministrator: boolean;
 }
@@ -66,7 +67,6 @@ function InstructorCourseAdminInstancesInner({
   course,
   canEditCourse,
   needToSync,
-  csrfToken,
   urlPrefix,
   isAdministrator,
 }: InstructorCourseAdminInstancesInnerProps) {
@@ -79,7 +79,6 @@ function InstructorCourseAdminInstancesInner({
       <CreateCourseInstanceModal
         show={showCreateModal}
         course={course}
-        csrfToken={csrfToken}
         isAdministrator={isAdministrator}
         onHide={() => setShowCreateModal(false)}
       />
@@ -211,12 +210,25 @@ function InstructorCourseAdminInstancesInner({
 }
 
 export function InstructorCourseAdminInstances({
-  ...props
-}: InstructorCourseAdminInstancesInnerProps) {
+  trpcCsrfToken,
+  courseId,
+  isDevMode,
+  ...innerProps
+}: InstructorCourseAdminInstancesInnerProps & {
+  trpcCsrfToken: string;
+  courseId: string;
+  isDevMode: boolean;
+}) {
   const [queryClient] = useState(() => new QueryClient());
+  const [trpcClient] = useState(() =>
+    createCourseTrpcClient({ csrfToken: trpcCsrfToken, courseId }),
+  );
+
   return (
-    <QueryClientProviderDebug client={queryClient}>
-      <InstructorCourseAdminInstancesInner {...props} />
+    <QueryClientProviderDebug client={queryClient} isDevMode={isDevMode}>
+      <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
+        <InstructorCourseAdminInstancesInner {...innerProps} />
+      </TRPCProvider>
     </QueryClientProviderDebug>
   );
 }

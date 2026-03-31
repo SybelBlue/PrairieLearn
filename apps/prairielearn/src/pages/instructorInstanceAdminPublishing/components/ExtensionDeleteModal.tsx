@@ -1,6 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
 import { Alert, Modal } from 'react-bootstrap';
 
+import type { createCourseInstanceTrpcClient } from '../../../trpc/courseInstance/client.js';
+import { useTRPC } from '../../../trpc/courseInstance/context.js';
+
 export interface ExtensionDeleteModalData {
   extensionId: string;
   extensionName: string | null;
@@ -9,38 +12,23 @@ export interface ExtensionDeleteModalData {
 
 export function ExtensionDeleteModal({
   data,
-  csrfToken,
+  trpcClient: _trpcClient,
   show,
   onHide,
   onExited,
   onSuccess,
 }: {
   data: ExtensionDeleteModalData | null;
-  csrfToken: string;
+  trpcClient: ReturnType<typeof createCourseInstanceTrpcClient>;
   show: boolean;
   onHide: () => void;
   onExited: () => void;
   onSuccess: () => void;
 }) {
-  const deleteMutation = useMutation({
-    mutationFn: async (extensionId: string) => {
-      const requestBody = {
-        __csrf_token: csrfToken,
-        __action: 'delete_extension',
-        extension_id: extensionId,
-      };
-      const resp = await fetch(window.location.pathname, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-      if (!resp.ok) {
-        const body = await resp.json();
-        throw new Error(body.message);
-      }
-    },
-    onSuccess,
-  });
+  const trpc = useTRPC();
+  const deleteMutation = useMutation(
+    trpc.publishingExtensions.destroy.mutationOptions({ onSuccess }),
+  );
 
   return (
     <Modal backdrop="static" show={show} onHide={onHide} onExited={onExited}>
@@ -99,7 +87,7 @@ export function ExtensionDeleteModal({
           disabled={deleteMutation.isPending}
           onClick={() => {
             if (!data) return;
-            void deleteMutation.mutate(data.extensionId);
+            deleteMutation.mutate({ extensionId: data.extensionId });
           }}
         >
           {deleteMutation.isPending ? 'Deleting...' : 'Delete'}

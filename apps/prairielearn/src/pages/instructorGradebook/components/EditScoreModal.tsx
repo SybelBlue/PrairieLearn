@@ -1,20 +1,16 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Alert, Button, Form, InputGroup, Modal } from 'react-bootstrap';
-import { z } from 'zod';
 
 import { getStudentEnrollmentUrl } from '../../../lib/client/url.js';
-import {
-  AssessmentInstanceScoreResultSchema,
-  type OtherGroupUser,
-} from '../instructorGradebook.types.js';
+import { useTRPC } from '../../../trpc/courseInstance/context.js';
+import type { OtherGroupUser } from '../instructorGradebook.types.js';
 
 interface EditScoreButtonProps {
   assessmentInstanceId: string;
   courseInstanceId: string;
   currentScore: number;
   otherUsers: OtherGroupUser[];
-  csrfToken: string;
 }
 
 export function EditScoreButton({
@@ -22,39 +18,20 @@ export function EditScoreButton({
   courseInstanceId,
   currentScore,
   otherUsers,
-  csrfToken,
 }: EditScoreButtonProps) {
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [show, setShow] = useState(false);
   const [scoreInput, setScoreInput] = useState(currentScore.toString());
 
-  const editScoreMutation = useMutation({
-    mutationKey: ['edit-score', assessmentInstanceId],
-    mutationFn: async (scorePerc: string) => {
-      const body = new URLSearchParams({
-        __action: 'edit_total_score_perc',
-        __csrf_token: csrfToken,
-        assessment_instance_id: assessmentInstanceId,
-        score_perc: scorePerc,
-      });
-
-      const res = await fetch(window.location.href, {
-        method: 'POST',
-        body,
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to update score');
-      }
-
-      const data = await res.json();
-      return z.array(AssessmentInstanceScoreResultSchema).parse(data);
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['gradebook'] });
-      setShow(false);
-    },
-  });
+  const editScoreMutation = useMutation(
+    trpc.gradebook.editScore.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: trpc.gradebook.list.queryKey() });
+        setShow(false);
+      },
+    }),
+  );
 
   const handleOpen = () => {
     setScoreInput(currentScore.toString());
@@ -87,7 +64,10 @@ export function EditScoreButton({
           <Form
             onSubmit={(e) => {
               e.preventDefault();
-              editScoreMutation.mutate(scoreInput);
+              editScoreMutation.mutate({
+                assessmentInstanceId,
+                scorePerc: Number.parseFloat(scoreInput),
+              });
             }}
           >
             <Modal.Body>

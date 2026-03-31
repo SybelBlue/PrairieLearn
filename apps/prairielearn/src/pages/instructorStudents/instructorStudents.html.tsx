@@ -18,7 +18,6 @@ import {
 import { parseAsArrayOf, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, ButtonGroup, Dropdown, DropdownButton } from 'react-bootstrap';
-import z from 'zod';
 
 import { formatDate } from '@prairielearn/formatter';
 import { run } from '@prairielearn/run';
@@ -52,11 +51,12 @@ import {
 import type { EnumEnrollmentStatus } from '../../lib/db-types.js';
 import { courseInstanceFilenamePrefix } from '../../lib/sanitize-name.js';
 import { createCourseInstanceTrpcClient } from '../../trpc/courseInstance/client.js';
+import { TRPCProvider, useTRPC } from '../../trpc/courseInstance/context.js';
 import { MAX_LABEL_UIDS } from '../instructorStudentsLabels/instructorStudentsLabels.types.js';
 
 import { InviteStudentsModal } from './components/InviteStudentsModal.js';
 import { SyncStudentsModal } from './components/SyncStudentsModal.js';
-import { STATUS_VALUES, type StudentRow, StudentRowSchema } from './instructorStudents.shared.js';
+import { STATUS_VALUES, type StudentRow } from './instructorStudents.shared.js';
 
 function IndeterminateCheckbox({
   checked,
@@ -219,7 +219,6 @@ interface StudentsCardProps {
   authzData: PageContextWithAuthzData['authz_data'];
   course: PageContext<'courseInstance', 'instructor'>['course'];
   courseInstance: PageContext<'courseInstance', 'instructor'>['course_instance'];
-  csrfToken: string;
   students: StudentRow[];
   studentLabels: StaffStudentLabel[];
   timezone: string;
@@ -244,7 +243,6 @@ function StudentsCard({
   students: initialStudents,
   studentLabels: initialStudentLabels,
   timezone,
-  csrfToken,
   selfEnrollLink,
   trpcCsrfToken,
   origHash: initialOrigHash,
@@ -273,6 +271,7 @@ function StudentsCard({
 
   const { createCheckboxProps } = useShiftClickCheckbox<StudentRow>();
 
+  const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [trpcClient] = useState(() =>
     createCourseInstanceTrpcClient({
@@ -282,14 +281,13 @@ function StudentsCard({
   );
 
   const { data: studentLabels = initialStudentLabels } = useQuery({
-    queryKey: ['student-labels', courseInstance.id],
-    queryFn: async () => {
-      const result = await trpcClient.studentLabels.listDefinitions.query();
-      setOrigHash(result.origHash);
-      return result.labels;
-    },
+    ...trpc.studentLabels.listDefinitions.queryOptions(),
     staleTime: Infinity,
-    initialData: initialStudentLabels,
+    initialData: { labels: initialStudentLabels, origHash: initialOrigHash },
+    select: (data) => {
+      setOrigHash(data.origHash);
+      return data.labels;
+    },
   });
 
   const columnFilters: { id: ColumnId; value: any }[] = useMemo(() => {
@@ -330,20 +328,8 @@ function StudentsCard({
 
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
 
-  const { data: students } = useQuery<StudentRow[]>({
-    queryKey: ['enrollments', 'students'],
-    queryFn: async () => {
-      const res = await fetch(window.location.pathname + '/data.json', {
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-      if (!res.ok) throw new Error('Failed to fetch students');
-      const data = await res.json();
-      const parsedData = z.array(StudentRowSchema).safeParse(data);
-      if (!parsedData.success) throw new Error('Failed to parse students');
-      return parsedData.data;
-    },
+  const { data: students } = useQuery({
+    ...trpc.students.list.queryOptions(),
     staleTime: Infinity,
     initialData: initialStudents,
   });
@@ -363,53 +349,17 @@ function StudentsCard({
     toCancelInvitation: string[],
     toRemove: string[],
   ): Promise<void> => {
-    const body = {
-      __action: 'sync_students',
-      __csrf_token: csrfToken,
+    const result = await trpcClient.students.syncStudents.mutate({
       toInvite,
       toCancelInvitation,
       toRemove,
-    };
-    const res = await fetch(window.location.href, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     });
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.error);
-    }
-    const { job_sequence_id } = z
-      .object({
-        job_sequence_id: z.string(),
-      })
-      .parse(json);
-
-    window.location.href = getCourseInstanceJobSequenceUrl(courseInstance.id, job_sequence_id);
+    window.location.href = getCourseInstanceJobSequenceUrl(courseInstance.id, result.jobSequenceId);
   };
 
   const inviteStudents = async (uids: string[]): Promise<void> => {
-    const body = {
-      __action: 'invite_uids',
-      __csrf_token: csrfToken,
-      uids: uids.join(','),
-    };
-    const res = await fetch(window.location.href, {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.error);
-    }
-    const { job_sequence_id } = z
-      .object({
-        job_sequence_id: z.string(),
-      })
-      .parse(json);
-
-    window.location.href = getCourseInstanceJobSequenceUrl(courseInstance.id, job_sequence_id);
+    const result = await trpcClient.students.inviteStudents.mutate({ uids });
+    window.location.href = getCourseInstanceJobSequenceUrl(courseInstance.id, result.jobSequenceId);
   };
 
   const [labelMutationSuccess, setLabelMutationSuccess] = useState<string | null>(null);
@@ -437,8 +387,10 @@ function StudentsCard({
         parts.push(`${result.notFound} not found.`);
       }
       setLabelMutationSuccess(parts.join(' '));
-      await queryClient.invalidateQueries({ queryKey: ['enrollments', 'students'] });
-      await queryClient.invalidateQueries({ queryKey: ['student-labels'] });
+      await queryClient.invalidateQueries({ queryKey: trpc.students.list.queryKey() });
+      await queryClient.invalidateQueries({
+        queryKey: trpc.studentLabels.listDefinitions.queryKey(),
+      });
     },
   });
 
@@ -465,8 +417,10 @@ function StudentsCard({
         parts.push(`${result.notFound} not found.`);
       }
       setLabelMutationSuccess(parts.join(' '));
-      await queryClient.invalidateQueries({ queryKey: ['enrollments', 'students'] });
-      await queryClient.invalidateQueries({ queryKey: ['student-labels'] });
+      await queryClient.invalidateQueries({ queryKey: trpc.students.list.queryKey() });
+      await queryClient.invalidateQueries({
+        queryKey: trpc.studentLabels.listDefinitions.queryKey(),
+      });
     },
   });
 
@@ -819,7 +773,7 @@ function StudentsCard({
                   // Reload the latest student data so that the preview of sync actions
                   // will be as accurate as possible.
                   void queryClient
-                    .invalidateQueries({ queryKey: ['enrollments', 'students'] })
+                    .invalidateQueries({ queryKey: trpc.students.list.queryKey() })
                     .then(() => {
                       setShowSync(true);
                     });
@@ -943,7 +897,6 @@ export const InstructorStudents = ({
   timezone,
   courseInstance,
   course,
-  csrfToken,
   isDevMode,
   trpcCsrfToken,
   origHash,
@@ -954,22 +907,29 @@ export const InstructorStudents = ({
   isDevMode: boolean;
 } & StudentsCardProps) => {
   const [queryClient] = useState(() => new QueryClient());
+  const [trpcClient] = useState(() =>
+    createCourseInstanceTrpcClient({
+      csrfToken: trpcCsrfToken,
+      courseInstanceId: courseInstance.id,
+    }),
+  );
 
   return (
     <NuqsAdapter search={search}>
       <QueryClientProviderDebug client={queryClient} isDevMode={isDevMode}>
-        <StudentsCard
-          authzData={authzData}
-          selfEnrollLink={selfEnrollLink}
-          course={course}
-          courseInstance={courseInstance}
-          students={students}
-          studentLabels={studentLabels}
-          timezone={timezone}
-          csrfToken={csrfToken}
-          trpcCsrfToken={trpcCsrfToken}
-          origHash={origHash}
-        />
+        <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
+          <StudentsCard
+            authzData={authzData}
+            selfEnrollLink={selfEnrollLink}
+            course={course}
+            courseInstance={courseInstance}
+            students={students}
+            studentLabels={studentLabels}
+            timezone={timezone}
+            trpcCsrfToken={trpcCsrfToken}
+            origHash={origHash}
+          />
+        </TRPCProvider>
       </QueryClientProviderDebug>
     </NuqsAdapter>
   );

@@ -16,9 +16,12 @@ import {
   type SelfEnrollmentFormValues,
 } from '../../../components/CourseInstanceSelfEnrollmentForm.js';
 import { CourseInstanceShortNameDescription } from '../../../components/ShortNameDescriptions.js';
+import { getAppError } from '../../../lib/client/errors.js';
 import type { StaffCourse } from '../../../lib/client/safe-db-types.js';
 import { getCourseEditErrorUrl, getCourseInstanceSettingsUrl } from '../../../lib/client/url.js';
 import { validateShortName } from '../../../lib/short-name.js';
+import { useTRPC } from '../../../trpc/course/context.js';
+import type { CourseInstancesError } from '../../../trpc/course/course-instances.js';
 
 interface CreateFormValues
   extends PublishingFormValues, SelfEnrollmentFormValues, PermissionsFormValues {
@@ -30,13 +33,11 @@ export function CreateCourseInstanceModal({
   show,
   onHide,
   course,
-  csrfToken,
   isAdministrator,
 }: {
   show: boolean;
   onHide: () => void;
   course: StaffCourse;
-  csrfToken: string;
   isAdministrator: boolean;
 }) {
   const methods = useForm<CreateFormValues>({
@@ -59,48 +60,33 @@ export function CreateCourseInstanceModal({
     formState: { errors },
   } = methods;
 
-  const createMutation = useMutation({
-    mutationFn: async (data: CreateFormValues) => {
-      const body = {
-        __csrf_token: csrfToken,
-        __action: 'add_course_instance',
-        short_name: data.short_name.trim(),
-        long_name: data.long_name.trim(),
-        start_date: data.start_date,
-        end_date: data.end_date,
-        self_enrollment_enabled: data.self_enrollment_enabled,
-        self_enrollment_use_enrollment_code: data.self_enrollment_use_enrollment_code,
-        course_instance_permission: data.course_instance_permission,
-      };
-
-      const resp = await fetch(window.location.pathname, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      const result = await resp.json();
-      if (!resp.ok) {
-        if (result.job_sequence_id) {
-          // Redirect to the error page
-          window.location.href = getCourseEditErrorUrl(course.id, result.job_sequence_id);
-          return null;
+  const trpc = useTRPC();
+  const createMutation = useMutation(
+    trpc.courseInstances.create.mutationOptions({
+      onSuccess: (data) => {
+        if (data.courseInstanceId) {
+          window.location.href = getCourseInstanceSettingsUrl(data.courseInstanceId);
         }
-
-        throw new Error(result.error);
-      }
-
-      return result;
-    },
-    onSuccess: (data) => {
-      if (data?.course_instance_id) {
-        window.location.href = getCourseInstanceSettingsUrl(data.course_instance_id);
-      }
-    },
-  });
+      },
+      onError: (error) => {
+        const appError = getAppError<CourseInstancesError['Create']>(error);
+        if (appError && appError.code === 'EDITOR_FAILED') {
+          window.location.href = getCourseEditErrorUrl(course.id, appError.jobSequenceId);
+        }
+      },
+    }),
+  );
 
   const onFormSubmit = async (data: CreateFormValues) => {
-    void createMutation.mutate(data);
+    void createMutation.mutate({
+      short_name: data.short_name.trim(),
+      long_name: data.long_name.trim(),
+      start_date: data.start_date,
+      end_date: data.end_date,
+      self_enrollment_enabled: data.self_enrollment_enabled,
+      self_enrollment_use_enrollment_code: data.self_enrollment_use_enrollment_code,
+      course_instance_permission: data.course_instance_permission,
+    });
   };
 
   return (

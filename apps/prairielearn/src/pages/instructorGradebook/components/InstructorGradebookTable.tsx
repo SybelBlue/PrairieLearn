@@ -21,7 +21,6 @@ import {
   useQueryStates,
 } from 'nuqs';
 import { useMemo, useRef, useState } from 'react';
-import { z } from 'zod';
 
 import {
   CategoricalColumnFilter,
@@ -45,11 +44,9 @@ import type { StaffStudentLabel } from '../../../lib/client/safe-db-types.js';
 import { QueryClientProviderDebug } from '../../../lib/client/tanstackQuery.js';
 import { getStudentEnrollmentUrl } from '../../../lib/client/url.js';
 import { type EnumEnrollmentStatus, EnumEnrollmentStatusSchema } from '../../../lib/db-types.js';
-import {
-  type CourseAssessmentRow,
-  type GradebookRow,
-  GradebookRowSchema,
-} from '../instructorGradebook.types.js';
+import { createCourseInstanceTrpcClient } from '../../../trpc/courseInstance/client.js';
+import { TRPCProvider, useTRPC } from '../../../trpc/courseInstance/context.js';
+import type { CourseAssessmentRow, GradebookRow } from '../instructorGradebook.types.js';
 
 import { EditScoreButton } from './EditScoreModal.js';
 
@@ -87,7 +84,6 @@ type ColumnId =
   | `a${number}`;
 
 interface GradebookTableProps {
-  csrfToken: string;
   courseAssessments: CourseAssessmentRow[];
   gradebookRows: GradebookRow[];
   studentLabels: StaffStudentLabel[];
@@ -97,7 +93,6 @@ interface GradebookTableProps {
 }
 
 function GradebookTable({
-  csrfToken,
   courseAssessments,
   gradebookRows: initialGradebookRows,
   studentLabels,
@@ -211,16 +206,9 @@ function GradebookTable({
 
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
 
-  const { data: gradebookRows } = useQuery<GradebookRow[]>({
-    queryKey: ['gradebook', urlPrefix],
-    queryFn: async () => {
-      const res = await fetch(`${urlPrefix}/instance_admin/gradebook/raw_data.json`);
-      if (!res.ok) throw new Error('Failed to fetch gradebook data');
-      const data = await res.json();
-      const parsedData = z.array(GradebookRowSchema).safeParse(data);
-      if (!parsedData.success) throw new Error('Failed to parse gradebook data');
-      return parsedData.data;
-    },
+  const trpc = useTRPC();
+  const { data: gradebookRows } = useQuery({
+    ...trpc.gradebook.list.queryOptions(),
     staleTime: Infinity,
     initialData: initialGradebookRows,
   });
@@ -399,7 +387,6 @@ function GradebookTable({
                         courseInstanceId={courseInstanceId}
                         currentScore={score}
                         otherUsers={assessmentData.uid_other_users_group}
-                        csrfToken={csrfToken}
                       />
                     </span>
                   );
@@ -416,7 +403,6 @@ function GradebookTable({
       assessmentsBySet.headingById,
       urlPrefix,
       courseInstanceId,
-      csrfToken,
       studentLabelsById,
     ],
   );
@@ -602,7 +588,7 @@ function GradebookTable({
 }
 
 export function InstructorGradebookTable({
-  csrfToken,
+  trpcCsrfToken,
   courseAssessments,
   gradebookRows,
   studentLabels,
@@ -612,23 +598,28 @@ export function InstructorGradebookTable({
   isDevMode,
   courseInstanceId,
 }: {
+  trpcCsrfToken: string;
   search: string;
   isDevMode: boolean;
   courseInstanceId: string;
 } & GradebookTableProps) {
   const [queryClient] = useState(() => new QueryClient());
+  const [trpcClient] = useState(() =>
+    createCourseInstanceTrpcClient({ csrfToken: trpcCsrfToken, courseInstanceId }),
+  );
   return (
     <NuqsAdapter search={search}>
       <QueryClientProviderDebug client={queryClient} isDevMode={isDevMode}>
-        <GradebookTable
-          csrfToken={csrfToken}
-          courseAssessments={courseAssessments}
-          gradebookRows={gradebookRows}
-          studentLabels={studentLabels}
-          urlPrefix={urlPrefix}
-          filenameBase={filenameBase}
-          courseInstanceId={courseInstanceId}
-        />
+        <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
+          <GradebookTable
+            courseAssessments={courseAssessments}
+            gradebookRows={gradebookRows}
+            studentLabels={studentLabels}
+            urlPrefix={urlPrefix}
+            filenameBase={filenameBase}
+            courseInstanceId={courseInstanceId}
+          />
+        </TRPCProvider>
       </QueryClientProviderDebug>
     </NuqsAdapter>
   );

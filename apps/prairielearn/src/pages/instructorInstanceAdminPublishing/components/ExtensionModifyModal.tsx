@@ -9,6 +9,8 @@ import z from 'zod';
 import { run } from '@prairielearn/run';
 
 import { parseUniqueValuesFromString } from '../../../lib/string-util.js';
+import type { createCourseInstanceTrpcClient } from '../../../trpc/courseInstance/client.js';
+import { useTRPC } from '../../../trpc/courseInstance/context.js';
 import { plainDateTimeStringToDate } from '../utils/dateUtils.js';
 
 export type ExtensionModifyModalData =
@@ -28,7 +30,7 @@ export function ExtensionModifyModal({
   currentUnpublishText,
   courseInstanceEndDate,
   courseInstanceTimezone,
-  csrfToken,
+  trpcClient,
   show,
   onHide,
   onExited,
@@ -38,7 +40,7 @@ export function ExtensionModifyModal({
   currentUnpublishText: string;
   courseInstanceEndDate: Date | null;
   courseInstanceTimezone: string;
-  csrfToken: string;
+  trpcClient: ReturnType<typeof createCourseInstanceTrpcClient>;
   show: boolean;
   onHide: () => void;
   onExited: () => void;
@@ -94,59 +96,47 @@ export function ExtensionModifyModal({
       return `The following UIDs were invalid: "${invalidEmails.join('", "')}"`;
     }
 
-    const params = new URLSearchParams();
-    params.append('uids', uids.join(','));
-    let resp: Response | null = null;
+    let result: { invalidUids: string[] };
     try {
-      resp = await fetch(`${window.location.pathname}/extension/check?${params.toString()}`);
+      result = await trpcClient.publishingExtensions.checkUids.query({ uids });
     } catch {
       return 'Failed to validate UIDs';
     }
 
-    if (!resp.ok) return 'Failed to validate UIDs';
-
-    const { success, data } = z
-      .object({ invalidUids: z.array(z.string()) })
-      .safeParse(await resp.json());
-    if (!success) return 'Failed to check UIDs';
-
-    const validCount = uids.length - data.invalidUids.length;
+    const validCount = uids.length - result.invalidUids.length;
     if (validCount < 1) {
       return 'Only enrolled students can be added to an extension';
     }
 
-    if (data.invalidUids.length > 0) {
-      setStage({ type: 'confirming', unenrolledUids: data.invalidUids });
+    if (result.invalidUids.length > 0) {
+      setStage({ type: 'confirming', unenrolledUids: result.invalidUids });
       return false;
     }
     return true;
   };
 
-  const saveMutation = useMutation({
-    mutationFn: async (formData: ExtensionFormValues) => {
-      const body = {
-        __csrf_token: csrfToken,
-        __action: data?.type === 'edit' ? 'edit_extension' : 'add_extension',
-        name: formData.name.trim(),
-        end_date: formData.end_date,
-        extension_id: data?.type === 'edit' ? data.extensionId : undefined,
-        uids: formData.uids.trim(),
-      };
-      const resp = await fetch(window.location.pathname, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!resp.ok) {
-        const body = await resp.json();
-        throw new Error(body.error);
-      }
-    },
-    onSuccess,
-  });
+  const trpc = useTRPC();
+  const addMutation = useMutation(trpc.publishingExtensions.add.mutationOptions({ onSuccess }));
+  const editMutation = useMutation(trpc.publishingExtensions.edit.mutationOptions({ onSuccess }));
 
-  const onFormSubmit = async (data: ExtensionFormValues) => {
-    void saveMutation.mutate(data);
+  const saveMutation = data?.type === 'edit' ? editMutation : addMutation;
+
+  const onFormSubmit = async (formData: ExtensionFormValues) => {
+    const uids = parseUniqueValuesFromString(formData.uids, MAX_UIDS);
+    if (data?.type === 'edit') {
+      editMutation.mutate({
+        extensionId: data.extensionId,
+        name: formData.name,
+        endDate: formData.end_date,
+        uids,
+      });
+    } else {
+      addMutation.mutate({
+        name: formData.name,
+        endDate: formData.end_date,
+        uids,
+      });
+    }
   };
 
   if (stage.type === 'confirming') {
@@ -180,9 +170,9 @@ export function ExtensionModifyModal({
             type="button"
             className="btn btn-warning"
             disabled={saveMutation.isPending}
-            onClick={handleSubmit((data, event) => {
+            onClick={handleSubmit((formData, event) => {
               event?.preventDefault();
-              void saveMutation.mutate(data);
+              void onFormSubmit(formData);
             })}
           >
             {saveMutation.isPending ? 'Saving...' : 'Save anyway'}
