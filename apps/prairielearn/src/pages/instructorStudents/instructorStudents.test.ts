@@ -2,6 +2,7 @@ import stripAnsi from 'strip-ansi';
 import { afterAll, assert, beforeAll, describe, test } from 'vitest';
 
 import { execute, queryRow } from '@prairielearn/postgres';
+import { generatePrefixCsrfToken } from '@prairielearn/signed-token';
 
 import { config } from '../../lib/config.js';
 import { EnrollmentSchema } from '../../lib/db-types.js';
@@ -11,18 +12,22 @@ import {
   insertCourseInstancePermissions,
   insertCoursePermissionsByUserUid,
 } from '../../models/course-permissions.js';
-import { fetchCheerio } from '../../tests/helperClient.js';
 import * as helperCourse from '../../tests/helperCourse.js';
 import * as helperServer from '../../tests/helperServer.js';
-import { getOrCreateUser } from '../../tests/utils/auth.js';
+import { type AuthUser, getOrCreateUser, withUser } from '../../tests/utils/auth.js';
+import { createCourseInstanceTrpcClient } from '../../trpc/courseInstance/client.js';
 
 const siteUrl = `http://localhost:${config.serverPort}`;
-const baseUrl = `${siteUrl}/pl`;
-const instructorHeaders = { cookie: 'pl_test_user=test_instructor' };
-const studentsUrl = `${baseUrl}/course_instance/1/instructor/instance_admin/students`;
+
+const instructorUser: AuthUser = {
+  uid: 'instructor@example.com',
+  name: 'Test Instructor',
+  uin: 'instructor1',
+  email: 'instructor@example.com',
+};
 
 describe('Instructor Students - Invite by UID', () => {
-  let csrfToken: string;
+  let trpcClient: ReturnType<typeof createCourseInstanceTrpcClient>;
 
   beforeAll(helperServer.before());
 
@@ -33,14 +38,12 @@ describe('Instructor Students - Invite by UID', () => {
 
     await execute("UPDATE institutions SET uid_regexp = '@example\\.com$' WHERE id = 1");
 
-    await getOrCreateUser({
-      uid: 'instructor@example.com',
-      name: 'Test Instructor',
-      uin: 'instructor1',
-      email: 'instructor@example.com',
-    });
+    // Enable modern publishing so the tRPC inviteStudents mutation works.
+    await execute('UPDATE course_instances SET modern_publishing = true WHERE id = 1');
 
-    const instructor = await insertCoursePermissionsByUserUid({
+    const dbUser = await getOrCreateUser(instructorUser);
+
+    await insertCoursePermissionsByUserUid({
       course_id: '1',
       uid: 'instructor@example.com',
       course_role: 'Owner',
@@ -50,41 +53,31 @@ describe('Instructor Students - Invite by UID', () => {
     await insertCourseInstancePermissions({
       course_id: '1',
       course_instance_id: '1',
-      user_id: instructor.id,
+      user_id: dbUser.id,
       course_instance_role: 'Student Data Editor',
       authn_user_id: '1',
     });
 
-    const response = await fetchCheerio(studentsUrl, {
-      headers: instructorHeaders,
+    const csrfToken = generatePrefixCsrfToken(
+      { url: '/pl/course_instance/1/instructor/trpc', authn_user_id: dbUser.id },
+      config.secretKey,
+    );
+    trpcClient = createCourseInstanceTrpcClient({
+      csrfToken,
+      courseInstanceId: '1',
+      urlBase: siteUrl,
     });
-    assert.equal(response.status, 200);
-    csrfToken = response.$('span#test_csrf_token').text();
-    assert.isString(csrfToken);
   });
 
   test.sequential('should successfully invite a nonexistent user', async () => {
-    const response = await fetch(studentsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        cookie: instructorHeaders.cookie,
-      },
-      body: new URLSearchParams({
-        __action: 'invite_uids',
-        __csrf_token: csrfToken,
-        uids: 'nonexistent@example.com',
-      }),
-    });
+    const result = await withUser(instructorUser, () =>
+      trpcClient.students.inviteStudents.mutate({ uids: ['nonexistent@example.com'] }),
+    );
+    assert.isString(result.jobSequenceId);
 
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.isString(data.job_sequence_id);
+    await helperServer.waitForJobSequenceSuccess(result.jobSequenceId);
 
-    await helperServer.waitForJobSequenceSuccess(data.job_sequence_id);
-
-    const jobSequence = await getJobSequence(data.job_sequence_id, '1');
+    const jobSequence = await getJobSequence(result.jobSequenceId, '1');
     assert.equal(jobSequence.status, 'Success');
     assert.lengthOf(jobSequence.jobs, 1);
 
@@ -113,27 +106,14 @@ describe('Instructor Students - Invite by UID', () => {
       authn_user_id: '1',
     });
 
-    const response = await fetch(studentsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        cookie: instructorHeaders.cookie,
-      },
-      body: new URLSearchParams({
-        __action: 'invite_uids',
-        __csrf_token: csrfToken,
-        uids: 'another_instructor@example.com',
-      }),
-    });
+    const result = await withUser(instructorUser, () =>
+      trpcClient.students.inviteStudents.mutate({ uids: ['another_instructor@example.com'] }),
+    );
+    assert.isString(result.jobSequenceId);
 
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.isString(data.job_sequence_id);
+    await helperServer.waitForJobSequenceSuccess(result.jobSequenceId);
 
-    await helperServer.waitForJobSequenceSuccess(data.job_sequence_id);
-
-    const jobSequence = await getJobSequence(data.job_sequence_id, '1');
+    const jobSequence = await getJobSequence(result.jobSequenceId, '1');
     assert.equal(jobSequence.status, 'Success');
 
     const job = jobSequence.jobs[0];
@@ -166,27 +146,14 @@ describe('Instructor Students - Invite by UID', () => {
       EnrollmentSchema,
     );
 
-    const response = await fetch(studentsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        cookie: instructorHeaders.cookie,
-      },
-      body: new URLSearchParams({
-        __action: 'invite_uids',
-        __csrf_token: csrfToken,
-        uids: 'blocked_student@example.com',
-      }),
-    });
+    const result = await withUser(instructorUser, () =>
+      trpcClient.students.inviteStudents.mutate({ uids: ['blocked_student@example.com'] }),
+    );
+    assert.isString(result.jobSequenceId);
 
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.isString(data.job_sequence_id);
+    await helperServer.waitForJobSequenceSuccess(result.jobSequenceId);
 
-    await helperServer.waitForJobSequenceSuccess(data.job_sequence_id);
-
-    const jobSequence = await getJobSequence(data.job_sequence_id, '1');
+    const jobSequence = await getJobSequence(result.jobSequenceId, '1');
     assert.equal(jobSequence.status, 'Success');
 
     const job = jobSequence.jobs[0];
@@ -208,27 +175,14 @@ describe('Instructor Students - Invite by UID', () => {
       email: 'new_student@example.com',
     });
 
-    const response = await fetch(studentsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        cookie: instructorHeaders.cookie,
-      },
-      body: new URLSearchParams({
-        __action: 'invite_uids',
-        __csrf_token: csrfToken,
-        uids: 'new_student@example.com',
-      }),
-    });
+    const result = await withUser(instructorUser, () =>
+      trpcClient.students.inviteStudents.mutate({ uids: ['new_student@example.com'] }),
+    );
+    assert.isString(result.jobSequenceId);
 
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.isString(data.job_sequence_id);
+    await helperServer.waitForJobSequenceSuccess(result.jobSequenceId);
 
-    await helperServer.waitForJobSequenceSuccess(data.job_sequence_id);
-
-    const jobSequence = await getJobSequence(data.job_sequence_id, '1');
+    const jobSequence = await getJobSequence(result.jobSequenceId, '1');
     assert.equal(jobSequence.status, 'Success');
 
     const job = jobSequence.jobs[0];
@@ -256,27 +210,16 @@ describe('Instructor Students - Invite by UID', () => {
       email: 'bulk_student2@example.com',
     });
 
-    const response = await fetch(studentsUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-        cookie: instructorHeaders.cookie,
-      },
-      body: new URLSearchParams({
-        __action: 'invite_uids',
-        __csrf_token: csrfToken,
-        uids: 'bulk_student1@example.com,bulk_student2@example.com',
+    const result = await withUser(instructorUser, () =>
+      trpcClient.students.inviteStudents.mutate({
+        uids: ['bulk_student1@example.com', 'bulk_student2@example.com'],
       }),
-    });
+    );
+    assert.isString(result.jobSequenceId);
 
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.isString(data.job_sequence_id);
+    await helperServer.waitForJobSequenceSuccess(result.jobSequenceId);
 
-    await helperServer.waitForJobSequenceSuccess(data.job_sequence_id);
-
-    const jobSequence = await getJobSequence(data.job_sequence_id, '1');
+    const jobSequence = await getJobSequence(result.jobSequenceId, '1');
     assert.equal(jobSequence.status, 'Success');
 
     const job = jobSequence.jobs[0];

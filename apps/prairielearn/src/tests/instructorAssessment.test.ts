@@ -2,6 +2,11 @@ import * as cheerio from 'cheerio';
 import type { DataNode, Element } from 'domhandler';
 import { afterAll, assert, beforeAll, describe, it } from 'vitest';
 
+import { generatePrefixCsrfToken } from '@prairielearn/signed-token';
+
+import { config } from '../lib/config.js';
+import { createCourseInstanceTrpcClient } from '../trpc/courseInstance/client.js';
+
 import * as helperExam from './helperExam.js';
 import type { TestExamQuestion } from './helperExam.js';
 import * as helperQuestion from './helperQuestion.js';
@@ -479,24 +484,24 @@ describe('Instructor assessment editing', { timeout: 20_000 }, function () {
     it('should parse', function () {
       locals.$ = cheerio.load(page);
     });
-    it('should have CSRF token for testing', function () {
-      elemList = locals.$('#test_csrf_token');
-      assert.lengthOf(elemList, 1);
-      locals.__csrf_token = elemList.text();
-      assert.isString(locals.__csrf_token);
-    });
-    it('should load raw data file successfully', async () => {
-      const res = await fetch(locals.instructorGradebookUrl + '/raw_data.json');
-      assert.equal(res.status, 200);
-      page = await res.text();
-    });
-    it('should parse as JSON array of objects', function () {
-      locals.gradebookData = JSON.parse(page);
+    it('should load gradebook data via tRPC', async () => {
+      const siteUrl = `http://localhost:${config.serverPort}`;
+      const trpcClient = createCourseInstanceTrpcClient({
+        csrfToken: generatePrefixCsrfToken(
+          { url: '/pl/course_instance/1/instructor/trpc', authn_user_id: '1' },
+          config.secretKey,
+        ),
+        courseInstanceId: '1',
+        urlBase: siteUrl,
+      });
+      locals.gradebookData = await trpcClient.gradebook.list.query();
       assert.isArray(locals.gradebookData);
       locals.gradebookData.forEach((obj) => assert.isObject(obj));
     });
     it('should contain a row for the dev user', function () {
-      locals.gradebookDataRow = locals.gradebookData.filter((row) => row.uid === 'dev@example.com');
+      locals.gradebookDataRow = locals.gradebookData.filter(
+        (row: any) => row.uid === 'dev@example.com',
+      );
       assert.lengthOf(locals.gradebookDataRow, 1);
     });
     it('should contain the correct score and assessment instance ID in the dev user row', function () {
@@ -507,23 +512,22 @@ describe('Instructor assessment editing', { timeout: 20_000 }, function () {
     });
   });
 
-  describe('16. POST to instructor gradebook URL to set total score_perc', function () {
-    it('should load successfully', async () => {
-      const res = await fetch(locals.instructorGradebookUrl, {
-        method: 'POST',
-        body: new URLSearchParams({
-          __action: locals.__action,
-          __csrf_token: locals.__csrf_token,
-          assessment_instance_id: '1',
-          score_perc: assessmentSetScorePerc2.toString(),
-        }),
+  describe('16. tRPC mutation to set total score_perc', function () {
+    it('should update successfully', async () => {
+      const siteUrl = `http://localhost:${config.serverPort}`;
+      const trpcClient = createCourseInstanceTrpcClient({
+        csrfToken: generatePrefixCsrfToken(
+          { url: '/pl/course_instance/1/instructor/trpc', authn_user_id: '1' },
+          config.secretKey,
+        ),
+        courseInstanceId: '1',
+        urlBase: siteUrl,
+      });
+      locals.pageData = await trpcClient.gradebook.editScore.mutate({
+        assessmentInstanceId: '1',
+        scorePerc: assessmentSetScorePerc2,
       });
       locals.postEndTime = Date.now();
-      assert.equal(res.status, 200);
-      page = await res.text();
-    });
-    it('should parse', function () {
-      locals.pageData = JSON.parse(page);
     });
     it('should contain the correctly updated score', function () {
       assert.lengthOf(locals.pageData, 1);

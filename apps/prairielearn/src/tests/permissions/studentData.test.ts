@@ -1,6 +1,8 @@
+import { TRPCClientError } from '@trpc/client';
 import { afterAll, assert, beforeAll, describe, test } from 'vitest';
 
 import * as sqldb from '@prairielearn/postgres';
+import { generatePrefixCsrfToken } from '@prairielearn/signed-token';
 
 import { dangerousFullSystemAuthz } from '../../lib/authz-data-lib.js';
 import { config } from '../../lib/config.js';
@@ -17,9 +19,11 @@ import {
   updateCourseInstancePermissionsRole,
 } from '../../models/course-permissions.js';
 import { ensureUncheckedEnrollment } from '../../models/enrollment.js';
+import { createCourseInstanceTrpcClient } from '../../trpc/courseInstance/client.js';
 import * as helperClient from '../helperClient.js';
 import { withPTReservation } from '../helperExam.js';
 import * as helperServer from '../helperServer.js';
+import { type AuthUser, getOrCreateUser, withUser } from '../utils/auth.js';
 
 const sql = sqldb.loadSqlEquiv(import.meta.url);
 
@@ -29,6 +33,40 @@ describe('student data access', { timeout: 60_000 }, function () {
   context.courseInstanceBaseUrl = `${context.baseUrl}/course_instance/1`;
   context.userIdInstructor = 2;
   context.userIdStudent = 3;
+
+  const instructorUser: AuthUser = {
+    uid: 'instructor@example.com',
+    name: 'Instructor User',
+    uin: '100000000',
+    email: 'instructor@example.com',
+  };
+
+  const viewerUser: AuthUser = {
+    uid: 'viewer_instructor@example.com',
+    name: 'Viewer Instructor',
+    uin: '100000002',
+    email: 'viewer_instructor@example.com',
+  };
+
+  const noRoleUser: AuthUser = {
+    uid: 'norole_instructor@example.com',
+    name: 'No Role Instructor',
+    uin: '100000003',
+    email: 'norole_instructor@example.com',
+  };
+
+  async function createGradebookTrpcClient(user: AuthUser) {
+    const dbUser = await getOrCreateUser(user);
+    const csrfToken = generatePrefixCsrfToken(
+      { url: '/pl/course_instance/1/instructor/trpc', authn_user_id: dbUser.id },
+      config.secretKey,
+    );
+    return createCourseInstanceTrpcClient({
+      csrfToken,
+      courseInstanceId: '1',
+      urlBase: context.siteUrl,
+    });
+  }
 
   beforeAll(async function () {
     await helperServer.before()();
@@ -71,6 +109,31 @@ describe('student data access', { timeout: 60_000 }, function () {
       requiredRole: ['System'],
       authzData: dangerousFullSystemAuthz(),
       actionDetail: 'implicit_joined',
+    });
+
+    // Set up a viewer-only instructor for tRPC gradebook permission tests.
+    const viewerDbUser = await getOrCreateUser(viewerUser);
+    await insertCoursePermissionsByUserUid({
+      course_id: '1',
+      uid: viewerUser.uid,
+      course_role: 'Viewer',
+      authn_user_id: '1',
+    });
+    await insertCourseInstancePermissions({
+      course_id: '1',
+      user_id: viewerDbUser.id,
+      course_instance_id: '1',
+      course_instance_role: 'Student Data Viewer',
+      authn_user_id: '1',
+    });
+
+    // Set up a no-role instructor for tRPC gradebook permission tests.
+    await getOrCreateUser(noRoleUser);
+    await insertCoursePermissionsByUserUid({
+      course_id: '1',
+      uid: noRoleUser.uid,
+      course_role: 'Viewer',
+      authn_user_id: '1',
     });
   });
 
@@ -587,13 +650,10 @@ describe('student data access', { timeout: 60_000 }, function () {
     assert.isTrue(response.ok);
   });
 
-  test.sequential('instructor (student data editor) can view gradebook raw data', async () => {
-    const headers = { cookie: 'pl_test_user=test_instructor' };
-    const response = await helperClient.fetchCheerio(
-      `${context.courseInstanceBaseUrl}/instructor/instance_admin/gradebook/raw_data.json`,
-      { headers },
-    );
-    assert.isTrue(response.ok);
+  test.sequential('instructor (student data editor) can view gradebook via tRPC', async () => {
+    const client = await createGradebookTrpcClient(instructorUser);
+    const data = await withUser(instructorUser, () => client.gradebook.list.query());
+    assert.isArray(data);
   });
 
   test.sequential(
@@ -656,16 +716,10 @@ describe('student data access', { timeout: 60_000 }, function () {
     assert.isTrue(response.ok);
   });
 
-  test.sequential('instructor (student data viewer) can view gradebook raw data', async () => {
-    const headers = {
-      cookie:
-        'pl_test_user=test_instructor; pl2_requested_course_instance_role=Student Data Viewer',
-    };
-    const response = await helperClient.fetchCheerio(
-      `${context.courseInstanceBaseUrl}/instructor/instance_admin/gradebook/raw_data.json`,
-      { headers },
-    );
-    assert.isTrue(response.ok);
+  test.sequential('instructor (student data viewer) can view gradebook via tRPC', async () => {
+    const client = await createGradebookTrpcClient(viewerUser);
+    const data = await withUser(viewerUser, () => client.gradebook.list.query());
+    assert.isArray(data);
   });
 
   test.sequential(
@@ -737,9 +791,8 @@ describe('student data access', { timeout: 60_000 }, function () {
       { headers },
     );
     // This page itself is visible even if the user doesn't have permissions to
-    // view student data, but it won't actually show student data, which is
-    // loaded asynchronously via the `raw_data.json` endpoint, which is tested
-    // below.
+    // view student data, but it won't actually show student data (which is
+    // loaded via tRPC and tested below).
     //
     // This page should contain a warning that the user doesn't have access to
     // student data, and a prompt to obtain access.
@@ -747,15 +800,15 @@ describe('student data access', { timeout: 60_000 }, function () {
     assert.include(response.$('.card-body').text(), "You don't have permission to view this page");
   });
 
-  test.sequential('instructor (no role) cannot view gradebook raw data', async () => {
-    const headers = {
-      cookie: 'pl_test_user=test_instructor; pl2_requested_course_instance_role=None',
-    };
-    const response = await helperClient.fetchCheerio(
-      `${context.courseInstanceBaseUrl}/instructor/instance_admin/gradebook/raw_data.json`,
-      { headers },
-    );
-    assert.equal(response.status, 403);
+  test.sequential('instructor (no role) cannot view gradebook via tRPC', async () => {
+    const client = await createGradebookTrpcClient(noRoleUser);
+    try {
+      await withUser(noRoleUser, () => client.gradebook.list.query());
+      assert.fail('Expected FORBIDDEN error');
+    } catch (e) {
+      assert.instanceOf(e, TRPCClientError);
+      assert.equal((e as TRPCClientError<any>).data?.code, 'FORBIDDEN');
+    }
   });
 
   test.sequential('instructor (no role) cannot view homework assessment instances', async () => {

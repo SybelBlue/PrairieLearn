@@ -281,7 +281,6 @@ const SKIP_ROUTES = [
   '/pl/course_instance/:course_instance_id/instructor/instance_admin/assessments/file/:filename',
   '/pl/course_instance/:course_instance_id/instructor/instance_admin/file_download/*',
   '/pl/course_instance/:course_instance_id/instructor/instance_admin/gradebook/:filename',
-  '/pl/course_instance/:course_instance_id/instructor/instance_admin/gradebook/raw_data.json',
   '/pl/course_instance/:course_instance_id/instructor/instance_question/:instance_question_id/clientFilesCourse/*',
   '/pl/course_instance/:course_instance_id/instructor/instance_question/:instance_question_id/clientFilesQuestion/*',
   '/pl/course_instance/:course_instance_id/instructor/instance_question/:instance_question_id/generatedFilesQuestion/variant/:unsafe_variant_id/*',
@@ -402,7 +401,6 @@ const SKIP_ROUTES = [
 
   // API routes.
   '/pl/course_instance/lookup',
-  '/pl/course_instance/:course_instance_id/instructor/instance_admin/publishing/extension/check',
 ];
 
 function shouldSkipPath(path: string) {
