@@ -1,5 +1,19 @@
 # @prairielearn/eslint-config
 
+## 2.1.0
+
+### Minor Changes
+
+- 18391d4: Add rule for noreferrer in target=\_blank links
+
+### Patch Changes
+
+- 07dfbca: Disable `checkFromLast` in `unicorn/prefer-array-find` rule since `findLast` is unavailable in our target lib
+- b6e03e9: Upgrade dependencies
+- Updated dependencies [aaeb317]
+- Updated dependencies [b6e03e9]
+  - @prairielearn/eslint-plugin@4.0.1
+
 ## 2.0.1
 
 ### Patch Changes

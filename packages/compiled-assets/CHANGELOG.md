@@ -1,5 +1,14 @@
 # @prairielearn/compiled-assets
 
+## 4.1.3
+
+### Patch Changes
+
+- e80a5a5: List direct dependencies explicitly
+- b6e03e9: Upgrade dependencies
+- Updated dependencies [b6e03e9]
+  - @prairielearn/html@5.0.3
+
 ## 4.1.2
 
 ### Patch Changes
