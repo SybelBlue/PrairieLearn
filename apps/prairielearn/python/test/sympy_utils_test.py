@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable
 from itertools import chain, repeat
 from typing import Any
 
@@ -267,6 +268,24 @@ class TestSympy:
             custom_functions=self.FUNCTION_NAMES,
         )
 
+    @pytest.mark.parametrize(
+        ("fn_name", "sympy_fn"),
+        [
+            (name, fn)
+            for name, fn in (
+                psu._Constants.functions | psu._Constants.trig_functions
+            ).items()
+            if not name.endswith("2")
+        ],
+    )
+    def test_unmangling_unary_functions(
+        self, fn_name: str, sympy_fn: Callable[[sympy.Expr], sympy.Expr]
+    ) -> None:
+        expr, sympy_ref = f"{fn_name}2m", sympy_fn(2 * self.M)
+        assert psu.SympyParseSuccess(sympy_ref) == psu.try_parse_string_as_sympy(
+            expr, self.SYMBOL_NAMES, allow_trig_functions=True
+        )
+
     @pytest.mark.parametrize(("a_sub", "sympy_ref"), INCORRECT_FUNCTION_PAIRS)
     def test_custom_function_incorrect(self, a_sub: str, sympy_ref: sympy.Expr) -> None:
         assert sympy_ref != psu.convert_string_to_sympy(
@@ -478,7 +497,7 @@ class TestSympy:
         fn_args: tuple[Any, ...],
     ) -> None:
         expr = sympy.Function(fn_name)(*fn_args)
-        assert isinstance(expr, sympy.Basic)
+        assert isinstance(expr, sympy.Expr)
 
         without_sets = psu.sympy_to_json(expr, allow_sets=False)
         with_sets = psu.sympy_to_json(expr, allow_sets=True)
@@ -490,6 +509,7 @@ class TestSympy:
         x = sympy.Symbol("x")
         union = sympy.Function("Union")
         expr = union(x)
+        assert isinstance(expr, sympy.Expr)
 
         assert psu.json_to_sympy(psu.sympy_to_json(expr)) == expr
 
