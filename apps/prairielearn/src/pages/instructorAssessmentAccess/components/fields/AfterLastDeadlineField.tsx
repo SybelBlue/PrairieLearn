@@ -53,22 +53,22 @@ function resolveConstraints(
   overrideIndex?: number,
 ): { dueDate: string | null; dueCredit: number; lateDeadlines: DeadlineEntry[] } {
   if (overrideIndex == null) {
-    const due = formValues.mainRule.due;
+    const due = formValues.defaultRule.due;
     return {
       dueDate: due.date,
       dueCredit: due.credit ?? 100,
-      lateDeadlines: formValues.mainRule.lateDeadlines,
+      lateDeadlines: formValues.defaultRule.lateDeadlines,
     };
   }
   const override = formValues.overrides[overrideIndex];
   const overriddenFields = override.overriddenFields;
-  const effectiveDue = overriddenFields.includes('due') ? override.due : formValues.mainRule.due;
+  const effectiveDue = overriddenFields.includes('due') ? override.due : formValues.defaultRule.due;
   return {
     dueDate: effectiveDue.date,
     dueCredit: effectiveDue.credit ?? 100,
     lateDeadlines: overriddenFields.includes('lateDeadlines')
       ? override.lateDeadlines
-      : formValues.mainRule.lateDeadlines,
+      : formValues.defaultRule.lateDeadlines,
   };
 }
 
@@ -88,20 +88,20 @@ function AfterLastDeadlineInput({
   const isOverride = overrideIndex != null;
   const creditFieldPath = isOverride
     ? (`overrides.${overrideIndex}.afterLastDeadline.credit` as const)
-    : ('mainRule.afterLastDeadline.credit' as const);
-  const idPrefix = isOverride ? `overrides-${overrideIndex}` : 'mainRule';
+    : ('defaultRule.afterLastDeadline.credit' as const);
+  const idPrefix = isOverride ? `overrides-${overrideIndex}` : 'defaultRule';
 
   // Field paths that affect credit validation — used for both display
   // reactivity (useWatch) and validation re-triggering (deps).
   const creditDeps: FieldPath<AccessControlFormData>[] = isOverride
     ? [
-        'mainRule.due',
-        'mainRule.lateDeadlines',
+        'defaultRule.due',
+        'defaultRule.lateDeadlines',
         `overrides.${overrideIndex}.overriddenFields`,
         `overrides.${overrideIndex}.due`,
         `overrides.${overrideIndex}.lateDeadlines`,
       ]
-    : ['mainRule.due', 'mainRule.lateDeadlines'];
+    : ['defaultRule.due', 'defaultRule.lateDeadlines'];
 
   const { register, getValues, trigger } = useFormContext<AccessControlFormData>();
   const { errors } = useFormState();
@@ -160,11 +160,7 @@ function AfterLastDeadlineInput({
 
   return (
     <Form.Group>
-      <div>
-        <strong>After last deadline</strong>
-        <br />
-        <small className="text-muted">{getLastDeadlineText()}</small>
-      </div>
+      <small className="text-muted d-block">{getLastDeadlineText()}</small>
       <div className="mb-2 mt-2">
         <RichSelect
           items={AFTER_LAST_DEADLINE_ITEMS}
@@ -236,17 +232,20 @@ function AfterLastDeadlineInput({
   );
 }
 
-export function MainAfterLastDeadlineField({ displayTimezone }: { displayTimezone: string }) {
-  const { field } = useController<AccessControlFormData, 'mainRule.afterLastDeadline'>({
-    name: 'mainRule.afterLastDeadline',
+export function DefaultAfterLastDeadlineField({ displayTimezone }: { displayTimezone: string }) {
+  const { field } = useController<AccessControlFormData, 'defaultRule.afterLastDeadline'>({
+    name: 'defaultRule.afterLastDeadline',
   });
 
   return (
-    <AfterLastDeadlineInput
-      value={field.value}
-      displayTimezone={displayTimezone}
-      onChange={field.onChange}
-    />
+    <div>
+      <strong className="d-block mb-2">After last deadline</strong>
+      <AfterLastDeadlineInput
+        value={field.value}
+        displayTimezone={displayTimezone}
+        onChange={field.onChange}
+      />
+    </div>
   );
 }
 
@@ -257,8 +256,8 @@ export function OverrideAfterLastDeadlineField({
   index: number;
   displayTimezone: string;
 }) {
-  const mainValue = useWatch<AccessControlFormData, 'mainRule.afterLastDeadline'>({
-    name: 'mainRule.afterLastDeadline',
+  const defaultRuleValue = useWatch<AccessControlFormData, 'defaultRule.afterLastDeadline'>({
+    name: 'defaultRule.afterLastDeadline',
   });
 
   const { field } = useController<AccessControlFormData, `overrides.${number}.afterLastDeadline`>({
@@ -275,7 +274,7 @@ export function OverrideAfterLastDeadlineField({
       isOverridden={isOverridden}
       label="After last deadline"
       onOverride={() => {
-        field.onChange(mainValue ?? { allowSubmissions: false });
+        field.onChange(defaultRuleValue ?? { allowSubmissions: false });
         addOverride();
       }}
       onRemoveOverride={removeOverride}
